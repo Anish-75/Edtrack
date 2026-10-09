@@ -11,6 +11,11 @@ API_KEY: str | None = os.getenv("API_KEY")          # None = no auth enforced
 DEBUG: bool = os.getenv("DEBUG", "false").lower() == "true"
 HOST: str = os.getenv("HOST", "0.0.0.0")
 PORT: int = int(os.getenv("PORT", "8000"))
+CORS_ORIGINS: list[str] = [
+    origin.strip()
+    for origin in os.getenv("CORS_ORIGINS", "*").split(",")
+    if origin.strip()
+]
 
 UPLOAD_FOLDER = "uploads"
 OUTPUT_FOLDER = "outputs"

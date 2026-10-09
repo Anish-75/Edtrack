@@ -237,40 +237,6 @@ const styles = `
     white-space: nowrap;
   }
 
-  /* ── api key ── */
-  .field-label {
-    display: block;
-    font-size: .78rem;
-    font-weight: 600;
-    color: var(--ink-soft);
-    margin-bottom: .4rem;
-    font-family: var(--font-mono);
-    letter-spacing: .03em;
-    text-transform: uppercase;
-  }
-  .field-hint {
-    font-size: .73rem;
-    color: var(--ink-muted);
-    margin-top: .3rem;
-    font-family: var(--font-mono);
-  }
-  .input {
-    width: 100%;
-    padding: .65rem .9rem;
-    border: 1px solid var(--border);
-    border-radius: 7px;
-    font-family: var(--font-mono);
-    font-size: .85rem;
-    color: var(--ink);
-    background: var(--paper);
-    transition: border-color .15s, box-shadow .15s;
-    outline: none;
-  }
-  .input:focus {
-    border-color: var(--gold);
-    box-shadow: 0 0 0 3px var(--gold-dim);
-  }
-
   /* ── button ── */
   .btn {
     display: inline-flex;
@@ -638,7 +604,6 @@ function StudentTable({ students }) {
 ───────────────────────────────────────────── */
 export default function App() {
   const [file, setFile]         = useState(null)
-  const [apiKey, setApiKey]     = useState('')
   const [dragging, setDragging] = useState(false)
   const [loading, setLoading]   = useState(false)
   const [error, setError]       = useState(null)
@@ -689,11 +654,8 @@ export default function App() {
     const form = new FormData()
     form.append('file', file)
 
-    const headers = {}
-    if (apiKey.trim()) headers['X-API-Key'] = apiKey.trim()
-
     try {
-      const res = await fetch('/upload', { method: 'POST', headers, body: form })
+      const res = await fetch('/upload', { method: 'POST', body: form })
       const data = await res.json()
       if (!res.ok) throw new Error(data.detail || data.error || 'Upload failed')
       setResult(data)
@@ -839,27 +801,6 @@ export default function App() {
                       <span className="file-size">{fmt_size(file.size)}</span>
                     </div>
                   )}
-                </div>
-
-                <div className="divider" />
-
-                {/* optional API key */}
-                <div>
-                  <label className="field-label" htmlFor="apikey">
-                    API Key <span style={{ opacity: .5 }}>(optional)</span>
-                  </label>
-                  <input
-                    id="apikey"
-                    className="input"
-                    type="password"
-                    placeholder="Leave blank if auth is not configured"
-                    value={apiKey}
-                    onChange={e => setApiKey(e.target.value)}
-                    autoComplete="off"
-                  />
-                  <div className="field-hint">
-                    Set the API_KEY env var on the server to enable auth.
-                  </div>
                 </div>
 
                 {/* error */}

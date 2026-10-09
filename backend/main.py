@@ -15,13 +15,16 @@ Fixes vs original Flask app:
 from __future__ import annotations
 
 import os
-import shutil
-import traceback
+import logging
+import tempfile
+import uuid
+from contextlib import asynccontextmanager
 from datetime import datetime
 from pathlib import Path
-from zipfile import ZipFile
+from zipfile import ZIP_DEFLATED, ZipFile
 
 import uvicorn
+from fastapi.concurrency import run_in_threadpool
 from fastapi import (
     BackgroundTasks,
     Depends,
@@ -41,6 +44,7 @@ from slowapi.util import get_remote_address
 from config import (
     ALLOWED_EXTENSIONS,
     API_KEY,
+    CORS_ORIGINS,
     DEBUG,
     FILE_TTL_SECONDS,
     HOST,
@@ -56,6 +60,15 @@ from marksheet_parser import (
 )
 from models import HealthResponse, StudentSummary, UploadResponse
 
+logger = logging.getLogger(__name__)
+
+
+@asynccontextmanager
+async def lifespan(_: FastAPI):
+    await run_in_threadpool(_cleanup_old_files)
+    yield
+
+
 # ── rate limiter ──────────────────────────────────────────────────────────────
 
 limiter = Limiter(key_func=get_remote_address)
@@ -66,6 +79,7 @@ app = FastAPI(
     title="Student Marksheet Parser API",
     description="Upload a university marksheet (.xlsx) and receive individual student grade reports.",
     version="2.0.0",
+    lifespan=lifespan,
 )
 
 app.state.limiter = limiter
@@ -73,7 +87,7 @@ app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],   # tighten to your frontend origin in production
+    allow_origins=CORS_ORIGINS,
     allow_methods=["*"],
     allow_headers=["*"],
 )
@@ -112,7 +126,7 @@ def _safe_output_path(filename: str) -> Path:
     # Strip any directory components the caller may have injected
     safe_name = Path(filename).name
     resolved = (base / safe_name).resolve()
-    if not str(resolved).startswith(str(base)):
+    if resolved == base or not resolved.is_relative_to(base):
         raise HTTPException(status_code=400, detail="Invalid filename.")
     return resolved
 
@@ -126,7 +140,46 @@ def _cleanup_old_files() -> None:
                 try:
                     os.remove(entry.path)
                 except OSError as exc:
-                    print(f"[cleanup] Could not delete {entry.path}: {exc}")
+                    logger.warning("Could not delete %s: %s", entry.path, exc)
+
+
+
+
+
+def _process_marksheet(input_path: Path) -> tuple[str, list[dict]]:
+    """Parse a marksheet and create its ZIP without sharing intermediate files."""
+    validate_marksheet_structure(str(input_path))
+    students = parse_marksheet(str(input_path))
+    if not students:
+        raise HTTPException(status_code=400, detail="No student data found in file.")
+
+    zip_name = f"All_Grade_Reports_{uuid.uuid4().hex}.zip"
+    zip_path = Path(OUTPUT_FOLDER) / zip_name
+
+    try:
+        with tempfile.TemporaryDirectory(prefix="marksheet_reports_") as temp_dir:
+            report_dir = Path(temp_dir)
+            report_names: set[str] = set()
+
+            with ZipFile(zip_path, "w", compression=ZIP_DEFLATED) as zf:
+                for student in students:
+                    safe_pr = student["pr_number"].replace("/", "_").replace("\\", "_")
+                    base_name = f"Grade_Report_{safe_pr}"
+                    report_name = f"{base_name}.xlsx"
+                    suffix = 2
+                    while report_name.casefold() in report_names:
+                        report_name = f"{base_name}_{suffix}.xlsx"
+                        suffix += 1
+                    report_names.add(report_name.casefold())
+
+                    report_path = report_dir / report_name
+                    create_individual_report(student, str(report_path))
+                    zf.write(report_path, report_name)
+    except Exception:
+        zip_path.unlink(missing_ok=True)
+        raise
+
+    return zip_name, students
 
 
 # ── routes ────────────────────────────────────────────────────────────────────
@@ -191,54 +244,30 @@ async def upload_marksheet(
 
     # ── save upload ───────────────────────────────────────────────────────
     safe_name = Path(file.filename).name   # strip any path components
-    input_path = Path(UPLOAD_FOLDER) / f"{timestamp}_{safe_name}"
+    input_path = Path(UPLOAD_FOLDER) / f"{uuid.uuid4().hex}_{safe_name}"
     input_path.write_bytes(content)
 
     try:
-        # ── validate structure ────────────────────────────────────────────
         try:
-            validate_marksheet_structure(str(input_path))
+            zip_name, students = await run_in_threadpool(_process_marksheet, input_path)
         except ValueError as exc:
-            raise HTTPException(status_code=400, detail=f"Validation failed: {exc}")
+            raise HTTPException(status_code=400, detail=f"Validation failed: {exc}") from exc
 
-        # ── parse ─────────────────────────────────────────────────────────
-        students = parse_marksheet(str(input_path))
-        if not students:
-            raise HTTPException(status_code=400, detail="No student data found in file.")
-
-        # ── generate individual reports ───────────────────────────────────
-        individual_files: list[Path] = []
         student_summaries: list[StudentSummary] = []
 
         for student in students:
-            safe_pr = student["pr_number"].replace("/", "_").replace("\\", "_")
-            report_path = Path(OUTPUT_FOLDER) / f"Grade_Report_{safe_pr}.xlsx"
-            create_individual_report(student, str(report_path))
-            individual_files.append(report_path)
-
             student_summaries.append(
                 StudentSummary(
                     pr_number=student["pr_number"],
                     name=student["name"],
                     seat_number=student["seat_number"],
                     overall_grade = f"SGPA {student.get('sgpa', '—')}",
+                    sgpa=student.get("sgpa"),
+                    tce=student.get("tce"),
+                    result=student.get("result"),
+                    pf=student.get("pf"),
                 )
             )
-
-        # ── zip everything ────────────────────────────────────────────────
-        zip_name = f"All_Grade_Reports_{timestamp}.zip"
-        zip_path = Path(OUTPUT_FOLDER) / zip_name
-
-        with ZipFile(zip_path, "w") as zf:
-            for report in individual_files:
-                zf.write(report, report.name)
-
-        # ── clean up individual xlsx files now that they are in the zip ───
-        for report in individual_files:
-            try:
-                report.unlink(missing_ok=True)
-            except OSError:
-                pass
 
         # ── schedule old-file cleanup as a background task ────────────────
         background_tasks.add_task(_cleanup_old_files)
@@ -255,7 +284,7 @@ async def upload_marksheet(
     except HTTPException:
         raise
     except Exception as exc:
-        print(traceback.format_exc())
+        logger.exception("Failed to process uploaded marksheet")
         raise HTTPException(
             status_code=500,
             detail=f"Failed to process marksheet: {exc}",

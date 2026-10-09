@@ -30,6 +30,10 @@ class StudentSummary(BaseModel):
     name: str
     seat_number: str
     overall_grade: str
+    sgpa: float | None = None
+    tce: int | None = None
+    result: str | None = None
+    pf: str | None = None
 
 
 class UploadResponse(BaseModel):

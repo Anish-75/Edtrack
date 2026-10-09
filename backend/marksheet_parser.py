@@ -18,8 +18,6 @@ This means the parser works even if:
 from __future__ import annotations
 
 import pandas as pd
-from openpyxl import Workbook
-from openpyxl.styles import Font, Alignment, Border, Side, PatternFill
 
 
 # ── Constants ─────────────────────────────────────────────────────────────────
@@ -32,19 +30,6 @@ _STUDENT_INFO_HEADERS = {
 _SUMMARY_KEYWORDS = {'SEM', 'SEMESTER', 'CGPA', 'RESULT', 'TCE', 'TOTAL', 'SGPA', 'SEM - I'}
 
 _WANT = {'CA', 'CE', 'GP', 'GRADE'}
-
-_THIN   = Side(style='thin')
-_BORDER = Border(left=_THIN, right=_THIN, top=_THIN, bottom=_THIN)
-
-_GRADE_FILLS = {
-    'O':  PatternFill('solid', fgColor='FFF3CD'),
-    'A+': PatternFill('solid', fgColor='D4EDDA'),
-    'A':  PatternFill('solid', fgColor='D1ECF1'),
-    'B+': PatternFill('solid', fgColor='CCE5FF'),
-    'B':  PatternFill('solid', fgColor='E2CFEE'),
-    'C':  PatternFill('solid', fgColor='F8D7DA'),
-    'D':  PatternFill('solid', fgColor='F8D7DA'),
-}
 
 _ANCHOR_COLS = {'PR. NO.', 'PR.NO.', 'NAME OF THE CANDIDATE', 'EXNO'}
 
@@ -244,7 +229,6 @@ def create_individual_report(student: dict, output_path: str) -> str:
     row = start_row + 1
 
     for course in student["courses"]:
-        ws.merge_cells(f"A{row}:A{row}")
         ws.merge_cells(f"B{row}:F{row}")
 
         ws[f"A{row}"] = course["code"]
